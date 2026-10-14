@@ -46,8 +46,9 @@ example
 /modules/sac-vosk/android/src/main/assets/model-en-us/
 /tmp/
 
-# Whisper ggml + Drive adapter cache (downloaded by `npm run whisper:model`)
+# Whisper bins stay local, except the small model stored with Git LFS.
 /assets/whisper/*.bin
+!/assets/whisper/ggml-small-q5_1.bin
 
 # local Claude config
 .claude/

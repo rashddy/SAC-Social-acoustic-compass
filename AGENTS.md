@@ -28,7 +28,7 @@ For a panel demo with no laptop or Wi-Fi, build the standalone APK with
 - `src/services/stt/` is the swappable speech-to-text seam. `SIMULATED` is the
   fallback when a native decoder is missing. Whisper is the default decoder
   (`whisper.rn` + ggml-small). It decodes base64 PCM from the compass BLE
-  frame — not the phone mic. The first listen downloads ggml-small-q5_1.
+  frame — not the phone mic. `assets/whisper/ggml-small-q5_1.bin` is stored with Git LFS. The first listen downloads it when that file is missing.
   A PEFT LoRA on `openai/whisper-small` can be merged with
   `npm run whisper:model` (needs Python + torch). Vosk remains optional via
   Settings. Rebuild the dev client after adding whisper.rn (`npm run build:dev`).
