@@ -10,22 +10,21 @@ type Props = {
 
 export function BLEStatusPill({ showLabel = true }: Props) {
   const devices = useCompassStore((s) => s.devices);
-  const isDemoMode = useCompassStore((s) => s.isDemoMode);
 
+  const compassUp = devices.COMPASS.status === 'CONNECTED';
   const necklaceUp = devices.NECKLACE.status === 'CONNECTED';
   const wristbandUp = devices.WRISTBAND.status === 'CONNECTED';
-  const linkCount = Number(necklaceUp) + Number(wristbandUp);
-  const connected = linkCount > 0 || isDemoMode;
-  const dotColor = connected ? Colors.connected : Colors.disconnected;
+  const connected = compassUp || necklaceUp || wristbandUp;
+  const dotColor = connected ? Colors.connected : Colors.textSecondary;
 
-  const label = isDemoMode
-    ? 'Demo Mode · 2 devices'
-    : linkCount === 0
-      ? 'Disconnected'
-      : `${linkCount}/2 linked`;
+  const label = compassUp
+    ? 'Connected'
+    : necklaceUp || wristbandUp
+      ? `${Number(necklaceUp) + Number(wristbandUp)} linked`
+      : 'Not connected';
 
   return (
-    <View style={[styles.pill, { borderColor: `${dotColor}33` }]}>
+    <View style={styles.pill}>
       <View style={[styles.dot, { backgroundColor: dotColor }]} />
       {showLabel && (
         <Text style={styles.label} numberOfLines={1}>
@@ -41,11 +40,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
+    paddingHorizontal: 10,
+    minHeight: 32,
     maxWidth: 180,
   },
   dot: {
@@ -55,7 +51,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontFamily: Fonts.label,
-    fontSize: 11,
+    fontSize: 15,
     color: Colors.textSecondary,
   },
 });

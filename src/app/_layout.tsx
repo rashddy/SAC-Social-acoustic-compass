@@ -1,10 +1,7 @@
-import { IBMPlexMono_400Regular } from '@expo-google-fonts/ibm-plex-mono/400Regular';
-import { IBMPlexMono_500Medium } from '@expo-google-fonts/ibm-plex-mono/500Medium';
+import '@/services/auth/installRandomValues';
 import { Inter_400Regular } from '@expo-google-fonts/inter/400Regular';
 import { Inter_500Medium } from '@expo-google-fonts/inter/500Medium';
 import { Inter_600SemiBold } from '@expo-google-fonts/inter/600SemiBold';
-import { SpaceGrotesk_500Medium } from '@expo-google-fonts/space-grotesk/500Medium';
-import { SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk/700Bold';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -14,6 +11,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { Colors } from '@/constants/colors';
+import { AuthGate } from '@/services/auth/AuthGate';
 import { settingsService } from '@/services/settingsService';
 
 // Fonts are a nice-to-have: the app must render even if they never arrive.
@@ -23,10 +21,6 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
-    SpaceGrotesk_500Medium,
-    SpaceGrotesk_700Bold,
-    IBMPlexMono_400Regular,
-    IBMPlexMono_500Medium,
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
@@ -64,6 +58,7 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
+      <AuthGate>
       <StatusBar style="light" />
       <Stack
         screenOptions={{
@@ -78,6 +73,7 @@ export default function RootLayout() {
         <Stack.Screen name="diagnostics" />
         <Stack.Screen name="session/[id]" options={{ presentation: 'modal' }} />
       </Stack>
+      </AuthGate>
     </GestureHandlerRootView>
   );
 }
@@ -134,6 +130,6 @@ const styles = StyleSheet.create({
   retryText: {
     fontSize: 15,
     fontWeight: '600',
-    color: Colors.background,
+    color: Colors.onPrimary,
   },
 });

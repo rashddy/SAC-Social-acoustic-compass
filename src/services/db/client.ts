@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DB_NAME = 'sac_compass.db';
 const DB_TIMEOUT_MS = 5000;
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 let db: SQLite.SQLiteDatabase | null = null;
 let opening: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -19,7 +19,14 @@ const SCHEMA_SQL = `
     userID INTEGER PRIMARY KEY AUTOINCREMENT,
     username VARCHAR(50) NOT NULL,
     pinCode VARCHAR(100) NOT NULL,
-    createdAt DATETIME NOT NULL
+    createdAt DATETIME NOT NULL,
+    passwordHash TEXT NOT NULL DEFAULT '',
+    wrappedDek TEXT NOT NULL DEFAULT '',
+    failedAttempts INTEGER NOT NULL DEFAULT 0,
+    lockedUntil INTEGER NOT NULL DEFAULT 0,
+    biometricEnabled INTEGER NOT NULL DEFAULT 0,
+    biometricCheck TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'user'
   );
 
   CREATE TABLE IF NOT EXISTS tblDevice (
@@ -86,6 +93,14 @@ const SCHEMA_SQL = `
 
   CREATE INDEX IF NOT EXISTS idx_event_session ON tblAcousticEvent(sessionID);
   CREATE INDEX IF NOT EXISTS idx_perf_session ON tblPerformanceLog(sessionID);
+
+  /* Local security events: type and time only. No passwords or transcripts. */
+  CREATE TABLE IF NOT EXISTS tblSecurityAudit (
+    auditID INTEGER PRIMARY KEY AUTOINCREMENT,
+    eventType TEXT NOT NULL,
+    createdAt INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_audit_time ON tblSecurityAudit(createdAt);
 
   /* Key/value store for app-level flags such as onboarding completion. */
   CREATE TABLE IF NOT EXISTS appState (
@@ -187,10 +202,47 @@ const ensureLegacyUser = async (database: SQLite.SQLiteDatabase): Promise<number
   return inserted.lastInsertRowId;
 };
 
+const AUTH_COLUMNS: [name: string, ddl: string][] = [
+  ['passwordHash', "ALTER TABLE tblUser ADD COLUMN passwordHash TEXT NOT NULL DEFAULT ''"],
+  ['wrappedDek', "ALTER TABLE tblUser ADD COLUMN wrappedDek TEXT NOT NULL DEFAULT ''"],
+  ['failedAttempts', 'ALTER TABLE tblUser ADD COLUMN failedAttempts INTEGER NOT NULL DEFAULT 0'],
+  ['lockedUntil', 'ALTER TABLE tblUser ADD COLUMN lockedUntil INTEGER NOT NULL DEFAULT 0'],
+  ['biometricEnabled', 'ALTER TABLE tblUser ADD COLUMN biometricEnabled INTEGER NOT NULL DEFAULT 0'],
+  ['biometricCheck', "ALTER TABLE tblUser ADD COLUMN biometricCheck TEXT NOT NULL DEFAULT ''"],
+  ['role', "ALTER TABLE tblUser ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"],
+];
+
+/**
+ * Version 3 adds offline password metadata. The ERD `pinCode` column stays, but
+ * it is cleared because a 4-digit SHA-256 PIN is no longer an authenticator.
+ * Existing transcript rows are left in place and encrypted after the first
+ * successful password setup. Rolling the app back to a build that expects
+ * plaintext transcripts will display ciphertext; restore a pre-migration
+ * database backup if that rollback is required.
+ */
+const migrateAuthColumns = async (database: SQLite.SQLiteDatabase): Promise<void> => {
+  const columns = await database.getAllAsync<{ name: string }>('PRAGMA table_info(tblUser)');
+  const present = new Set(columns.map((column) => column.name));
+  for (const [name, ddl] of AUTH_COLUMNS) {
+    if (!present.has(name)) await database.execAsync(ddl);
+  }
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS tblSecurityAudit (
+      auditID INTEGER PRIMARY KEY AUTOINCREMENT,
+      eventType TEXT NOT NULL,
+      createdAt INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_time ON tblSecurityAudit(createdAt);
+    UPDATE tblUser SET pinCode = '' WHERE pinCode != '';
+    UPDATE tblUser SET role = 'user' WHERE role IS NULL OR role = '' OR role = 'admin';
+  `);
+};
+
 const initialize = async (): Promise<SQLite.SQLiteDatabase> => {
   const opened = await SQLite.openDatabaseAsync(DB_NAME);
   await opened.execAsync(SCHEMA_SQL);
   await migrateLegacyTables(opened);
+  await migrateAuthColumns(opened);
   await opened.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return opened;
 };

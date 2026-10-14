@@ -13,8 +13,8 @@ export function encodeBase64(input: string): string {
     const c = i < input.length ? input.charCodeAt(i++) : NaN;
     const n = (a << 16) | ((isNaN(b) ? 0 : b) << 8) | (isNaN(c) ? 0 : c);
     output +=
-      BASE64_CHARS[n >> 18 & 63] +
-      BASE64_CHARS[n >> 12 & 63] +
+      BASE64_CHARS[(n >> 18) & 63] +
+      BASE64_CHARS[(n >> 12) & 63] +
       BASE64_CHARS[isNaN(b) ? 64 : (n >> 6) & 63] +
       BASE64_CHARS[isNaN(c) ? 64 : n & 63];
   }
@@ -39,4 +39,23 @@ export function decodeBase64(input: string): string {
     if (enc4 !== 64) output += String.fromCharCode((n >> 8) & 255);
   }
   return output;
+}
+
+/** Decode a BLE characteristic base64 payload into raw bytes. */
+export function decodeBase64ToBytes(input: string): Uint8Array {
+  const binary = decodeBase64(input);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i) & 0xff;
+  }
+  return bytes;
+}
+
+/** Encode raw bytes for Vosk / STT consumers that expect base64 PCM. */
+export function encodeBytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  return encodeBase64(binary);
 }

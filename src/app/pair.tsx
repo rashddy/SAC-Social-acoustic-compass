@@ -3,12 +3,10 @@ import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import Animated, {
@@ -24,7 +22,7 @@ import { SACButton } from '@/components/SACButton';
 import {
   DEVICE_DESCRIPTION,
   DEVICE_LABEL,
-  DEVICE_ROLES,
+  PAIR_ROLES,
   type DeviceRole,
 } from '@/constants/bleConstants';
 import { Colors } from '@/constants/colors';
@@ -32,7 +30,6 @@ import { Fonts } from '@/constants/typography';
 import { bleService } from '@/services/bleService';
 import { requestBlePermissions } from '@/services/blePermissions';
 import { deviceRepo } from '@/services/db';
-import { demoService } from '@/services/demoService';
 import { useCompassStore, type ConnectionStatus } from '@/store/compassStore';
 
 const STATUS_LABELS: Record<ConnectionStatus, string> = {
@@ -45,6 +42,7 @@ const STATUS_LABELS: Record<ConnectionStatus, string> = {
 };
 
 const ROLE_ICON: Record<DeviceRole, keyof typeof Ionicons.glyphMap> = {
+  COMPASS: 'compass-outline',
   NECKLACE: 'mic-outline',
   WRISTBAND: 'watch-outline',
 };
@@ -67,19 +65,24 @@ export default function PairScreen() {
   const scanStatus = useCompassStore((s) => s.scanStatus);
   const discoveredDevices = useCompassStore((s) => s.discoveredDevices);
   const devices = useCompassStore((s) => s.devices);
-  const setDemoMode = useCompassStore((s) => s.setDemoMode);
   const setHasCompletedOnboarding = useCompassStore((s) => s.setHasCompletedOnboarding);
 
   const [permissionDenied, setPermissionDenied] = useState(false);
-  const [passkeyTarget, setPasskeyTarget] = useState<{ id: string; role: DeviceRole } | null>(
-    null,
-  );
-  const [passkey, setPasskey] = useState('');
+  const [lastCompassId, setLastCompassId] = useState<string | null>(null);
+  const [lastCompassName, setLastCompassName] = useState<string>(DEVICE_LABEL.COMPASS);
   const pulse = useSharedValue(1);
   const scanningRef = useRef(false);
   const bleSupported = bleService.isSupported();
 
-  const necklaceReady = devices.NECKLACE.status === 'CONNECTED';
+  const compassLink = devices.COMPASS;
+  const compassReady = compassLink.status === 'CONNECTED';
+
+  const compassDevices = discoveredDevices.filter(
+    (d) =>
+      d.role === 'COMPASS' ||
+      /^sac[-_]/i.test(d.name) ||
+      /compass/i.test(d.name),
+  );
 
   useEffect(() => {
     pulse.value = withRepeat(
@@ -88,6 +91,16 @@ export default function PairScreen() {
       true,
     );
   }, [pulse]);
+
+  useEffect(() => {
+    void (async () => {
+      const row = await deviceRepo.findByRole('COMPASS');
+      if (row?.macaddress) {
+        setLastCompassId(row.macaddress);
+        setLastCompassName(row.deviceNAME || DEVICE_LABEL.COMPASS);
+      }
+    })();
+  }, []);
 
   const startScan = useCallback(async () => {
     if (!bleSupported || scanningRef.current) return;
@@ -102,11 +115,13 @@ export default function PairScreen() {
     setPermissionDenied(false);
 
     if (!(await bleService.isPoweredOn())) {
-      Alert.alert('Bluetooth is off', 'Turn on Bluetooth to scan for your SAC wearables.');
+      Alert.alert('Bluetooth is off', 'Turn on Bluetooth to scan for SAC-Compass.');
       scanningRef.current = false;
       return;
     }
 
+    // App reload leaves a ghost GATT link → ESP stops advertising until released
+    // (handled inside startScan / prepareForDiscovery).
     await bleService.startScan();
     scanningRef.current = false;
   }, [bleSupported]);
@@ -123,55 +138,36 @@ export default function PairScreen() {
     opacity: 2 - pulse.value,
   }));
 
-  const connectDevice = async (id: string, role: DeviceRole) => {
-    const ok = await bleService.connectToDevice(id, role);
+  const connectDevice = async (id: string, _role?: DeviceRole) => {
+    const ok = await bleService.connectToDevice(id, 'COMPASS');
     if (!ok) {
-      Alert.alert('Connection failed', `Could not connect to the ${DEVICE_LABEL[role]}.`);
+      Alert.alert(
+        'Connection failed',
+        'Could not connect to SAC-Compass. After a reload, wait a second and tap Scan Again (ghost links are cleared automatically). Make sure the ESP32 is advertising and not bonded in phone Bluetooth settings.',
+      );
       return;
     }
 
-    const link = useCompassStore.getState().devices[role];
-    const alreadyBonded = await deviceRepo.isBonded(id);
-
+    const link = useCompassStore.getState().devices.COMPASS;
+    setLastCompassId(id);
+    setLastCompassName(link.name ?? DEVICE_LABEL.COMPASS);
     await deviceRepo.upsert({
-      deviceName: link.name ?? DEVICE_LABEL[role],
-      deviceType: role,
+      deviceName: link.name ?? DEVICE_LABEL.COMPASS,
+      deviceType: 'COMPASS',
       macAddress: id,
       firmwareVersion: link.firmware,
       batteryLevel: link.battery,
-      passkeyBonded: alreadyBonded,
+      passkeyBonded: true,
     });
-
-    if (!alreadyBonded) setPasskeyTarget({ id, role });
   };
 
-  /**
-   * First-time pairing requires the passkey printed on the wearable, so a nearby
-   * device cannot silently subscribe to a user's conversation stream.
-   */
-  const confirmPasskey = async () => {
-    if (!passkeyTarget || passkey.length < 4) return;
-
-    const accepted = await bleService.sendPasskey(passkeyTarget.role, passkey);
-    if (!accepted) {
-      Alert.alert('Pairing rejected', 'That passkey was not accepted by the device.');
-      setPasskey('');
-      return;
-    }
-
-    await deviceRepo.markBonded(passkeyTarget.id);
-    setPasskeyTarget(null);
-    setPasskey('');
+  const reconnectLast = async () => {
+    if (!lastCompassId) return;
+    await bleService.prepareForDiscovery([lastCompassId]);
+    await connectDevice(lastCompassId, 'COMPASS');
   };
 
   const enterApp = () => {
-    setHasCompletedOnboarding(true);
-    router.replace('/(tabs)/home');
-  };
-
-  const enterDemoMode = () => {
-    demoService.start();
-    setDemoMode(true);
     setHasCompletedOnboarding(true);
     router.replace('/(tabs)/home');
   };
@@ -183,11 +179,11 @@ export default function PairScreen() {
           <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
         </Pressable>
 
-        <Text style={styles.title}>Pair Devices</Text>
+        <Text style={styles.title}>Connect Compass</Text>
         <Text style={styles.subtitle}>
           {bleSupported
-            ? 'Connect both SAC wearables over Bluetooth Low Energy'
-            : 'Bluetooth pairing'}
+            ? 'Scan for SAC-Compass, tap to connect, then Continue. Do not pair in system Bluetooth settings.'
+            : 'Bluetooth connection'}
         </Text>
 
         {!bleSupported && (
@@ -202,13 +198,13 @@ export default function PairScreen() {
             <Ionicons name="warning" size={22} color={Colors.overlap} />
             <Text style={styles.bannerText}>
               Bluetooth permissions were denied. Allow Nearby devices and Location in Android
-              Settings, then tap Scan Again.
+              Settings, turn Location ON, then tap Scan Again.
             </Text>
           </View>
         )}
 
         <View style={styles.slots}>
-          {DEVICE_ROLES.map((role) => {
+          {PAIR_ROLES.map((role) => {
             const link = devices[role];
             const connected = link.status === 'CONNECTED';
             return (
@@ -231,7 +227,7 @@ export default function PairScreen() {
                 </View>
                 <View style={styles.slotFooter}>
                   <Text style={[styles.slotStatus, connected && styles.slotStatusOn]}>
-                    {STATUS_LABELS[link.status]}
+                    {connected ? 'Connected' : STATUS_LABELS[link.status]}
                   </Text>
                   {link.battery != null && (
                     <Text style={styles.slotMeta}>{link.battery}%</Text>
@@ -257,36 +253,36 @@ export default function PairScreen() {
         )}
 
         <Text style={styles.scanStatus}>
-          {bleSupported ? STATUS_LABELS[scanStatus] : 'Use Demo Mode below'}
+          {bleSupported ? STATUS_LABELS[scanStatus] : 'Bluetooth needs a development build'}
         </Text>
 
         <View style={styles.list}>
-          {discoveredDevices.length === 0 ? (
+          {compassDevices.length === 0 ? (
             <Text style={styles.empty}>
               {!bleSupported
-                ? 'Tap "Continue in Demo Mode" to explore the full system with simulated hardware.'
+                ? 'Expo Go cannot talk to the ESP32. Build a development client (npm run build:dev), install it, then run npm run start:dev-client.'
                 : scanStatus === 'SCANNING'
-                  ? 'Searching for SAC-Necklace and SAC-Wristband…'
-                  : 'No SAC devices found yet. Power on your wearables and move closer.'}
+                  ? 'Searching for SAC-Compass…'
+                  : 'No SAC-Compass found. After a reload, ghost links are cleared on Scan Again — wait ~1s for the ESP to advertise. If nRF Connect also cannot see it, reflash firmware/sac_compass and check Serial for “Advertising as SAC-Compass”. Location ON; forget SAC-* bonds.'}
             </Text>
           ) : (
-            discoveredDevices.map((item) => {
-              const connected = devices[item.role].id === item.id;
+            compassDevices.map((item) => {
+              const connected = devices.COMPASS.id === item.id;
               return (
                 <Pressable
                   key={item.id}
                   style={styles.deviceCard}
-                  disabled={connected}
+                  disabled={connected || devices.COMPASS.status === 'CONNECTING'}
                   onPress={() => connectDevice(item.id, item.role)}>
                   <Ionicons
-                    name={ROLE_ICON[item.role]}
+                    name={ROLE_ICON.COMPASS}
                     size={24}
                     color={connected ? Colors.connected : Colors.secondary}
                   />
                   <View style={styles.deviceInfo}>
                     <Text style={styles.deviceName}>{item.name}</Text>
                     <Text style={styles.deviceRssi}>
-                      {item.role === 'NECKLACE' ? 'Necklace' : 'Wristband'} · {item.rssi} dBm
+                      Compass · {item.rssi} dBm
                     </Text>
                   </View>
                   <SignalBars rssi={item.rssi} />
@@ -310,64 +306,38 @@ export default function PairScreen() {
                 variant="secondary"
                 icon="refresh"
               />
+              {lastCompassId && !compassReady && (
+                <SACButton
+                  title={`Reconnect ${lastCompassName}`}
+                  onPress={reconnectLast}
+                  variant="secondary"
+                  icon="bluetooth"
+                  disabled={compassLink.status === 'CONNECTING'}
+                />
+              )}
               <SACButton
                 title="Continue"
                 onPress={enterApp}
                 icon="arrow-forward"
-                disabled={!necklaceReady}
+                disabled={!compassReady}
               />
-              {!necklaceReady && (
+              {!compassReady && (
                 <Text style={styles.hint}>
-                  The SAC-Necklace must be connected to receive direction and speech data.
+                  Connect SAC-Compass before continuing. After a reload, tap Scan Again — do not
+                  pair in the phone’s Bluetooth settings.
                 </Text>
               )}
             </>
           )}
-          <SACButton
-            title="Continue in Demo Mode"
-            onPress={enterDemoMode}
-            variant={bleSupported ? 'ghost' : 'primary'}
-            icon="play"
-          />
+          {!compassReady && (
+            <SACButton
+              title="Open compass"
+              onPress={enterApp}
+              variant={bleSupported ? 'ghost' : 'primary'}
+            />
+          )}
         </View>
       </ScrollView>
-
-      <Modal visible={passkeyTarget != null} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Ionicons name="key-outline" size={28} color={Colors.primary} />
-            <Text style={styles.modalTitle}>Confirm Pairing</Text>
-            <Text style={styles.modalBody}>
-              Enter the passkey printed on your{' '}
-              {passkeyTarget ? DEVICE_LABEL[passkeyTarget.role] : 'device'} to authorise this
-              phone.
-            </Text>
-            <TextInput
-              value={passkey}
-              onChangeText={setPasskey}
-              keyboardType="number-pad"
-              maxLength={6}
-              placeholder="000000"
-              placeholderTextColor={Colors.textSecondary}
-              style={styles.modalInput}
-              autoFocus
-            />
-            <SACButton
-              title="Pair Device"
-              onPress={confirmPasskey}
-              disabled={passkey.length < 4}
-            />
-            <SACButton
-              title="Skip for now"
-              onPress={() => {
-                setPasskeyTarget(null);
-                setPasskey('');
-              }}
-              variant="ghost"
-            />
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -516,10 +486,8 @@ const styles = StyleSheet.create({
   scanStatus: {
     fontFamily: Fonts.labelSemiBold,
     fontSize: 13,
-    color: Colors.primary,
+    color: Colors.textSecondary,
     textAlign: 'center',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
     marginTop: 8,
   },
   list: {
@@ -578,45 +546,5 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     textAlign: 'center',
     lineHeight: 18,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(8, 12, 20, 0.9)',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
-  modalCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: 24,
-    gap: 12,
-    alignItems: 'center',
-  },
-  modalTitle: {
-    fontFamily: Fonts.displayMedium,
-    fontSize: 20,
-    color: Colors.textPrimary,
-  },
-  modalBody: {
-    fontFamily: Fonts.label,
-    fontSize: 13,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  modalInput: {
-    alignSelf: 'stretch',
-    minHeight: 56,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-    color: Colors.textPrimary,
-    fontFamily: Fonts.displayMedium,
-    fontSize: 24,
-    letterSpacing: 8,
-    textAlign: 'center',
   },
 });

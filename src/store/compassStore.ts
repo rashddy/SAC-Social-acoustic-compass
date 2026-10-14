@@ -15,6 +15,8 @@ export type WristbandIntensity = 'LOW' | 'MEDIUM' | 'HIGH';
 export type WristbandPattern = 'PULSE' | 'TAP' | 'HOLD';
 export type SttEngine = 'VOSK' | 'WHISPER';
 export type CompassView = 'RADAR' | 'ARROW';
+export type MicZone = 'FRONT' | 'LEFT' | 'RIGHT';
+/** Wristband motor cardinals (FRONT→N, RIGHT→E, LEFT→W). */
 export type WristbandDirection = 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW' | null;
 
 export type TranscriptEntry = {
@@ -27,6 +29,13 @@ export type TranscriptEntry = {
   emotion: Emotion;
   confidence: number;
   speakerCount: number;
+  timestamp: number;
+};
+
+/** A reply the user typed, shown in the chat and held up for the speaker to read. */
+export type TypedReply = {
+  id: string;
+  text: string;
   timestamp: number;
 };
 
@@ -93,10 +102,13 @@ type CompassState = {
   audioState: AudioState;
   emotion: Emotion;
   emotionConfidence: number;
+  /** Locked-mic fundamental frequency in Hz. 0 when pitch is not available. */
+  pitchHz: number;
   confidence: number;
   liveTranscript: string;
   streamingWord: string;
   sessionLog: TranscriptEntry[];
+  replies: TypedReply[];
   activeSessionStartedAt: number | null;
   wristbandDirection: WristbandDirection;
   wristbandFlash: boolean;
@@ -110,6 +122,11 @@ type CompassState = {
   highContrast: boolean;
   perfSamples: PerformanceSample[];
   micCalibrationFault: boolean;
+  /** Live BLE→STT pipeline status for the transcript strip. */
+  blePcmPackets: number;
+  sttReady: boolean;
+  sttEngineLabel: string;
+  sttHint: string;
 
   setHasCompletedOnboarding: (value: boolean) => void;
   setDemoMode: (value: boolean) => void;
@@ -123,8 +140,16 @@ type CompassState = {
   appendTranscriptWord: (word: string, doa: number, audioState: AudioState) => void;
   finalizeUtterance: () => void;
   addTranscriptEntry: (entry: Omit<TranscriptEntry, 'id'>) => void;
+  reviseLastTranscript: (text: string) => void;
+  addReply: (text: string) => TypedReply;
   setLiveTranscript: (text: string) => void;
   setStreamingWord: (word: string) => void;
+  setSttStatus: (patch: {
+    blePcmPackets?: number;
+    sttReady?: boolean;
+    sttEngineLabel?: string;
+    sttHint?: string;
+  }) => void;
   setWristbandDirection: (direction: WristbandDirection) => void;
   triggerWristbandFlash: () => void;
   setWristbandIntensity: (intensity: WristbandIntensity) => void;
@@ -139,19 +164,25 @@ type CompassState = {
   reset: () => void;
 };
 
-const doaToDirection = (doa: number): WristbandDirection => {
-  const normalized = ((doa % 360) + 360) % 360;
-  if (normalized >= 337.5 || normalized < 22.5) return 'N';
-  if (normalized < 67.5) return 'NE';
-  if (normalized < 112.5) return 'E';
-  if (normalized < 157.5) return 'SE';
-  if (normalized < 202.5) return 'S';
-  if (normalized < 247.5) return 'SW';
-  if (normalized < 292.5) return 'W';
-  return 'NW';
+/** Map DOA degrees to the three mic zones (LEFT / FRONT / RIGHT). */
+const doaToMicZone = (doa: number): MicZone => {
+  let n = ((doa % 360) + 360) % 360;
+  if (n > 180) n -= 360;
+  if (n >= -45 && n <= 45) return 'FRONT';
+  if (n > 45 && n <= 135) return 'RIGHT';
+  if (n < -45 && n >= -135) return 'LEFT';
+  // Behind the wearer — snap to nearest side mic.
+  return n > 0 ? 'RIGHT' : 'LEFT';
 };
 
-const directionLabel = (doa: number): string => doaToDirection(doa) ?? 'N';
+const doaToDirection = (doa: number): WristbandDirection => {
+  const zone = doaToMicZone(doa);
+  if (zone === 'FRONT') return 'N';
+  if (zone === 'RIGHT') return 'E';
+  return 'W';
+};
+
+const directionLabel = (doa: number): string => doaToMicZone(doa);
 
 /** Keeps the diagnostics screen bounded; older samples live in SQLite. */
 const MAX_PERF_SAMPLES = 120;
@@ -161,19 +192,21 @@ let flashTimeout: ReturnType<typeof setTimeout> | null = null;
 export const useCompassStore = create<CompassState>((set, get) => ({
   hasCompletedOnboarding: false,
   isDemoMode: false,
-  devices: { NECKLACE: emptyLink(), WRISTBAND: emptyLink() },
+  devices: { COMPASS: emptyLink(), NECKLACE: emptyLink(), WRISTBAND: emptyLink() },
   scanStatus: 'IDLE',
   discoveredDevices: [],
   currentDoa: 0,
-  speakerDots: [{ doa: 0, id: 0 }],
+  speakerDots: [],
   speakerCount: 0,
   audioState: 'SILENCE',
   emotion: 'NEUTRAL',
   emotionConfidence: 0,
+  pitchHz: 0,
   confidence: 0,
   liveTranscript: '',
   streamingWord: '',
   sessionLog: [],
+  replies: [],
   activeSessionStartedAt: null,
   wristbandDirection: null,
   wristbandFlash: false,
@@ -181,12 +214,16 @@ export const useCompassStore = create<CompassState>((set, get) => ({
   wristbandPattern: 'PULSE',
   laughterMode: false,
   transcriptionPaused: false,
-  sttEngine: 'VOSK',
+  sttEngine: 'WHISPER',
   compassView: 'RADAR',
   fontScale: 'MEDIUM',
   highContrast: false,
   perfSamples: [],
   micCalibrationFault: false,
+  blePcmPackets: 0,
+  sttReady: false,
+  sttEngineLabel: '',
+  sttHint: '',
 
   setHasCompletedOnboarding: (value) => set({ hasCompletedOnboarding: value }),
 
@@ -212,20 +249,29 @@ export const useCompassStore = create<CompassState>((set, get) => ({
   handleBlePacket: (packet) => {
     const direction = doaToDirection(packet.doa);
     const prevDirection = get().wristbandDirection;
-    const speakerDots: SpeakerDot[] =
-      packet.state === 'OVERLAP' && packet.speakers?.length
+    const isIdle = packet.state === 'SILENCE' || packet.state === 'NOISE';
+    const speakerDots: SpeakerDot[] = isIdle
+      ? []
+      : packet.state === 'OVERLAP' && packet.speakers?.length
         ? packet.speakers.slice(0, MAX_PARTICIPANTS)
         : [{ doa: packet.doa, id: 0 }];
 
     set((s) => ({
       currentDoa: packet.doa,
       speakerDots,
-      speakerCount: packet.speakerCount ?? speakerDots.length,
+      speakerCount: isIdle ? 0 : (packet.speakerCount ?? speakerDots.length),
       audioState: packet.state,
-      emotion: packet.emotion ?? 'NEUTRAL',
-      emotionConfidence: packet.emotionConfidence ?? 0,
+      emotion: isIdle ? 'NEUTRAL' : (packet.emotion ?? s.emotion),
+      emotionConfidence: isIdle ? 0 : (packet.emotionConfidence ?? s.emotionConfidence),
+      pitchHz: isIdle
+        ? 0
+        : packet.pitchHz != null
+          ? packet.pitchHz
+          : packet.emotion != null
+            ? 0
+            : s.pitchHz,
       confidence: packet.confidence,
-      wristbandDirection: packet.state === 'SILENCE' ? null : direction,
+      wristbandDirection: isIdle ? null : direction,
       micCalibrationFault: packet.micCalibrationFault ?? s.micCalibrationFault,
       activeSessionStartedAt:
         s.activeSessionStartedAt ?? (packet.state === 'SILENCE' ? null : Date.now()),
@@ -234,6 +280,11 @@ export const useCompassStore = create<CompassState>((set, get) => ({
           ? s.devices
           : {
               ...s.devices,
+              COMPASS: {
+                ...s.devices.COMPASS,
+                battery: packet.battery ?? s.devices.COMPASS.battery,
+                firmware: packet.firmware ?? s.devices.COMPASS.firmware,
+              },
               NECKLACE: {
                 ...s.devices.NECKLACE,
                 battery: packet.battery ?? s.devices.NECKLACE.battery,
@@ -242,7 +293,7 @@ export const useCompassStore = create<CompassState>((set, get) => ({
             },
     }));
 
-    if (direction && direction !== prevDirection && packet.state !== 'SILENCE') {
+    if (direction && direction !== prevDirection && !isIdle) {
       get().triggerWristbandFlash();
     }
   },
@@ -301,8 +352,47 @@ export const useCompassStore = create<CompassState>((set, get) => ({
       ],
     })),
 
+  reviseLastTranscript: (text) =>
+    set((s) => {
+      if (s.sessionLog.length === 0) return s;
+      const next = s.sessionLog.slice();
+      const last = next[next.length - 1]!;
+      next[next.length - 1] = { ...last, text };
+      return { sessionLog: next };
+    }),
+
+  addReply: (text) => {
+    const reply: TypedReply = {
+      id: `reply-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      text: text.trim(),
+      timestamp: Date.now(),
+    };
+    set((s) => ({ replies: [...(s.replies ?? []), reply] }));
+    return reply;
+  },
+
   setLiveTranscript: (text) => set({ liveTranscript: text }),
-  setStreamingWord: (word) => set({ streamingWord: word }),
+  setStreamingWord: (word) =>
+    set((s) => (s.streamingWord === word ? s : { streamingWord: word })),
+
+  setSttStatus: (patch) =>
+    set((s) => {
+      const next = {
+        blePcmPackets: patch.blePcmPackets ?? s.blePcmPackets,
+        sttReady: patch.sttReady ?? s.sttReady,
+        sttEngineLabel: patch.sttEngineLabel ?? s.sttEngineLabel,
+        sttHint: patch.sttHint ?? s.sttHint,
+      };
+      if (
+        next.blePcmPackets === s.blePcmPackets &&
+        next.sttReady === s.sttReady &&
+        next.sttEngineLabel === s.sttEngineLabel &&
+        next.sttHint === s.sttHint
+      ) {
+        return s;
+      }
+      return next;
+    }),
 
   setWristbandDirection: (direction) => set({ wristbandDirection: direction }),
 
@@ -324,6 +414,7 @@ export const useCompassStore = create<CompassState>((set, get) => ({
   clearSessionLog: () =>
     set({
       sessionLog: [],
+      replies: [],
       liveTranscript: '',
       streamingWord: '',
       activeSessionStartedAt: null,
@@ -331,34 +422,42 @@ export const useCompassStore = create<CompassState>((set, get) => ({
 
   reset: () =>
     set({
-      devices: { NECKLACE: emptyLink(), WRISTBAND: emptyLink() },
+      devices: { COMPASS: emptyLink(), NECKLACE: emptyLink(), WRISTBAND: emptyLink() },
       scanStatus: 'IDLE',
       discoveredDevices: [],
       currentDoa: 0,
-      speakerDots: [{ doa: 0, id: 0 }],
+      speakerDots: [],
       speakerCount: 0,
       audioState: 'SILENCE',
       emotion: 'NEUTRAL',
       emotionConfidence: 0,
+      pitchHz: 0,
       confidence: 0,
       liveTranscript: '',
       streamingWord: '',
       sessionLog: [],
+      replies: [],
       activeSessionStartedAt: null,
       wristbandDirection: null,
       perfSamples: [],
       micCalibrationFault: false,
       isDemoMode: false,
+      blePcmPackets: 0,
+      sttReady: false,
+      sttEngineLabel: '',
+      sttHint: '',
     }),
 }));
 
-/** True when at least one wearable is connected. */
+/** True when the compass (or a legacy wearable) is connected. */
 export const selectIsConnected = (s: CompassState): boolean =>
-  s.devices.NECKLACE.status === 'CONNECTED' || s.devices.WRISTBAND.status === 'CONNECTED';
+  s.devices.COMPASS.status === 'CONNECTED' ||
+  s.devices.NECKLACE.status === 'CONNECTED' ||
+  s.devices.WRISTBAND.status === 'CONNECTED';
 
 export const selectConnectedRoles = (s: CompassState): DeviceRole[] =>
   (Object.keys(s.devices) as DeviceRole[]).filter(
     (role) => s.devices[role].status === 'CONNECTED',
   );
 
-export { doaToDirection, directionLabel };
+export { doaToDirection, doaToMicZone, directionLabel };

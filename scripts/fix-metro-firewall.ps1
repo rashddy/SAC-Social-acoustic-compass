@@ -1,10 +1,9 @@
 # Opens the Metro bundler ports so Expo Go / the dev client on your phone can
 # reach this computer over Wi-Fi.
 #
-# Why this is needed: Windows scopes the default Node.js inbound rules to the
-# "Public" profile, but a home/campus Wi-Fi network is usually "Private", so the
-# phone's request to port 8081 is dropped and Expo Go reports
-# "Failed to download remote update".
+# Why this is needed: Windows often marks Wi-Fi as "Public", and the default
+# Node.js inbound rules / Private-only rules then drop the phone's request to
+# port 8081 ("Failed to connect to /x.x.x.x:8081").
 #
 # Run once, as Administrator:
 #   Right-click this file > "Run with PowerShell"  (approve the UAC prompt)
@@ -25,10 +24,19 @@ if (-not $isAdmin) {
 foreach ($port in 8081, 8082) {
   $name = "Expo Metro $port"
   Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  # Include Public: many home/campus networks stay Public and Private-only rules fail.
   New-NetFirewallRule -DisplayName $name `
     -Direction Inbound -Protocol TCP -LocalPort $port `
-    -Action Allow -Profile Private, Domain | Out-Null
-  Write-Host "Allowed inbound TCP $port on Private/Domain networks." -ForegroundColor Green
+    -Action Allow -Profile Any | Out-Null
+  Write-Host "Allowed inbound TCP $port on all network profiles." -ForegroundColor Green
+}
+
+try {
+  Get-NetConnectionProfile | Where-Object { $_.InterfaceAlias -like 'Wi-Fi*' } |
+    Set-NetConnectionProfile -NetworkCategory Private -ErrorAction Stop
+  Write-Host 'Set Wi-Fi network category to Private.' -ForegroundColor Green
+} catch {
+  Write-Host "Could not set Wi-Fi to Private: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
 $wifi = Get-NetIPAddress -AddressFamily IPv4 |

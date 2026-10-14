@@ -27,4 +27,5 @@ export type {
   SessionWithEvents,
   UserRow,
 } from './types';
-export { userRepo } from './userRepo';
+export { auditRepo, type AuditEvent } from './auditRepo';
+export { sqliteAccountStore, userRepo } from './userRepo';

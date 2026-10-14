@@ -1,6 +1,7 @@
-import { createVoskEngine, createWhisperEngine } from './nativeEngines';
+import { createVoskEngine } from './nativeEngines';
 import { createSimulatedEngine } from './simulatedEngine';
 import type { SttEngine, SttEngineId } from './types';
+import { createWhisperEngine } from './whisperEngine';
 
 const registry: Record<SttEngineId, SttEngine> = {
   SIMULATED: createSimulatedEngine(),
@@ -16,4 +17,5 @@ export const resolveEngine = (id: SttEngineId): SttEngine => {
 
 export const getEngine = (id: SttEngineId): SttEngine => registry[id];
 
+export { isLiveSttEngine } from './types';
 export type { SttEngine, SttEngineId, SttResult } from './types';

@@ -12,6 +12,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/typography';
+import { authService } from '@/services/auth/authService';
+import { auditRepo } from '@/services/db';
 import { dbService, type SavedSession } from '@/services/dbService';
 
 type FilterType = 'ALL' | 'SINGLE' | 'OVERLAP' | 'LAUGHTER';
@@ -46,7 +48,14 @@ export default function HistoryScreen() {
   );
 
   const deleteSession = async (id: string) => {
-    await dbService.deleteSession(id);
+    let removed = await dbService.deleteSession(id);
+    if (!removed) {
+      const allowed = await authService.ensureRecentAuth();
+      if (!allowed) return;
+      removed = await dbService.deleteSession(id);
+    }
+    if (!removed) return;
+    await auditRepo.append('SESSION_DELETED');
     loadSessions();
   };
 
@@ -54,7 +63,7 @@ export default function HistoryScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Text style={styles.title}>Session History</Text>
+      <Text style={styles.title}>History</Text>
 
       <View style={styles.filterRow}>
         {filters.map((f) => (
@@ -122,7 +131,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: Fonts.display,
-    fontSize: 22,
+    fontSize: 28,
     color: Colors.textPrimary,
     paddingHorizontal: 20,
     paddingVertical: 12,

@@ -7,6 +7,7 @@
  */
 const os = require('os');
 const { spawn } = require('child_process');
+const qrcode = require('qrcode-terminal');
 
 const SKIP = /wsl|vethernet|virtualbox|vbox|vmware|loopback|bluetooth|hyper-v|default switch/i;
 const PREFERRED = ['Wi-Fi', 'WiFi', 'WLAN', 'Ethernet', 'Ethernet 2', 'Ethernet 3'];
@@ -30,26 +31,55 @@ function pickLanIp() {
   return null;
 }
 
-const lan = pickLanIp();
+const forcedHost = (process.env.SAC_PACKAGER_HOST || '').trim();
+const lan = forcedHost ? { name: 'phone link', address: forcedHost } : pickLanIp();
 const extraArgs = process.argv.slice(2);
 
 // Bluetooth needs a development build, so --dev-client and --go are mutually
-// exclusive: Expo Go can only run the simulated demo mode.
+// exclusive. Expo Go can open the screens, but it cannot talk to the necklace.
 const useDevClient = extraArgs.includes('--dev-client');
 const clientFlag = useDevClient ? [] : ['--go'];
 const args = ['expo', 'start', ...clientFlag, ...extraArgs];
 
-if (lan) {
-  process.env.REACT_NATIVE_PACKAGER_HOSTNAME = lan.address;
-  console.log(`Using LAN address ${lan.address} (${lan.name}) for Expo Go.`);
-} else {
-  console.warn('No LAN IPv4 found. Expo may advertise an unreachable address.');
+function appScheme() {
+  try {
+    const app = require('../app.json');
+    const scheme = app.expo && app.expo.scheme;
+    return typeof scheme === 'string' ? scheme : null;
+  } catch {
+    return null;
+  }
 }
 
-const child = spawn('npx', args, {
-  stdio: 'inherit',
-  env: process.env,
-  shell: true,
-});
-
-child.on('exit', (code) => process.exit(code ?? 0));
+if (lan) {
+  process.env.REACT_NATIVE_PACKAGER_HOSTNAME = lan.address;
+  const portFlag = extraArgs.indexOf('--port');
+  const port = portFlag >= 0 && extraArgs[portFlag + 1] ? extraArgs[portFlag + 1] : '8081';
+  const manifest = `http://${lan.address}:${port}`;
+  const scheme = appScheme();
+  const scanTarget =
+    useDevClient && scheme
+      ? `${scheme}://expo-development-client/?url=${encodeURIComponent(manifest)}`
+      : `exp://${lan.address}:${port}`;
+  console.log(`Using LAN address ${lan.address} (${lan.name}).`);
+  console.log(`Scan target: ${scanTarget}`);
+  console.log('');
+  qrcode.generate(scanTarget, { small: true }, (code) => {
+    console.log(code);
+    console.log('Scan the code above with the app on your phone.');
+    const child = spawn('npx', args, {
+      stdio: 'inherit',
+      env: process.env,
+      shell: true,
+    });
+    child.on('exit', (code) => process.exit(code ?? 0));
+  });
+} else {
+  console.warn('No LAN IPv4 found. Expo may advertise an unreachable address.');
+  const child = spawn('npx', args, {
+    stdio: 'inherit',
+    env: process.env,
+    shell: true,
+  });
+  child.on('exit', (code) => process.exit(code ?? 0));
+}

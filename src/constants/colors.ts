@@ -1,21 +1,27 @@
+/**
+ * Dark palette taken from iOS system colors (Human Interface Guidelines)
+ * and the quiet chrome of Google Live Transcribe: black canvas, gray
+ * groups, one blue for actions. Status hues stay reserved for meaning.
+ */
 export const Colors = {
-  background: '#080C14',
-  surface: '#0F1828',
-  surfaceGlass: 'rgba(15, 24, 40, 0.85)',
-  primary: '#00E5FF',
-  secondary: '#7B61FF',
-  warning: '#FFD166',
-  silence: '#2A3A4A',
-  overlap: '#FF6B6B',
-  textPrimary: '#E8F4FD',
-  textSecondary: '#7A9BB5',
-  border: 'rgba(0, 229, 255, 0.08)',
-  success: '#00E676',
-  connected: '#00E676',
-  disconnected: '#FF6B6B',
+  background: '#000000',
+  surface: '#1C1C1E',
+  surfaceGlass: '#2C2C2E',
+  primary: '#0A84FF',
+  onPrimary: '#FFFFFF',
+  secondary: '#64D2FF',
+  warning: '#FF9F0A',
+  silence: '#3A3A3C',
+  overlap: '#FF453A',
+  textPrimary: '#FFFFFF',
+  textSecondary: '#98989D',
+  border: '#38383A',
+  success: '#30D158',
+  connected: '#30D158',
+  disconnected: '#FF453A',
 } as const;
 
-export const SpeakerColors = ['#00E5FF', '#7B61FF', '#FFD166'] as const;
+export const SpeakerColors = ['#0A84FF', '#64D2FF', '#FF9F0A'] as const;
 
 export const AudioStateColors = {
   SINGLE: Colors.primary,

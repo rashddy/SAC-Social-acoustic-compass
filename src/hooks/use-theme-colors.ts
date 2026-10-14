@@ -9,8 +9,8 @@ export function useThemeColors() {
   return {
     ...BaseColors,
     textPrimary: '#FFFFFF',
-    textSecondary: '#A8C8E8',
-    border: 'rgba(0, 229, 255, 0.2)',
-    primary: '#00FFFF',
+    textSecondary: '#EBEBF5',
+    border: '#636366',
+    primary: '#0A84FF',
   };
 }

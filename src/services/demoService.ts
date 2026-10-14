@@ -22,8 +22,10 @@ const emotionForState = (state: AudioStateName, index: number): EmotionName => {
 
 let demoInterval: ReturnType<typeof setInterval> | null = null;
 let stateIndex = 0;
-let doaAngle = 0;
-let necklaceBattery = 92;
+/** Cycles LEFT → FRONT → RIGHT (matches the three mics). */
+const DEMO_ZONES = [-90, 0, 90] as const;
+let zoneIndex = 0;
+let compassBattery = 92;
 let wristbandBattery = 88;
 let ticks = 0;
 
@@ -34,7 +36,7 @@ export const demoService = {
   isRunning: (): boolean => demoInterval != null,
 
   /**
-   * Drives the whole app from simulated hardware: both BLE links up, a rotating
+   * Drives the whole app from simulated hardware: compass link up, a rotating
    * direction of arrival, all five acoustic states, emotion cues, battery drain,
    * and latency figures that populate the diagnostics screen. Used for panel
    * demos while the wearables are still being fabricated.
@@ -45,16 +47,16 @@ export const demoService = {
     const store = useCompassStore.getState();
     store.setDemoMode(true);
 
-    necklaceBattery = 92;
+    compassBattery = 92;
     wristbandBattery = 88;
     ticks = 0;
 
-    store.setDeviceLink('NECKLACE', {
+    store.setDeviceLink('COMPASS', {
       status: 'CONNECTED',
-      id: 'DEMO-NECKLACE',
-      name: `${DEVICE_LABEL.NECKLACE} (Demo)`,
+      id: 'DEMO-COMPASS',
+      name: `${DEVICE_LABEL.COMPASS} (Demo)`,
       rssi: -52,
-      battery: necklaceBattery,
+      battery: compassBattery,
       firmware: '1.0.0-demo',
       lastConnected: Date.now(),
       fault: null,
@@ -76,23 +78,25 @@ export const demoService = {
       const s = useCompassStore.getState();
       ticks += 1;
 
-      doaAngle = (doaAngle + 36) % 360;
+      zoneIndex = (zoneIndex + 1) % DEMO_ZONES.length;
+      const doaAngle = DEMO_ZONES[zoneIndex]!;
       stateIndex = (stateIndex + 1) % AUDIO_STATES.length;
       const state = AUDIO_STATES[stateIndex];
 
       // Roughly 1% per minute, so a demo visibly trends downward.
       if (ticks % 15 === 0) {
-        necklaceBattery = Math.max(5, necklaceBattery - 1);
+        compassBattery = Math.max(5, compassBattery - 1);
         wristbandBattery = Math.max(5, wristbandBattery - 1);
+        s.setDeviceLink('COMPASS', { battery: compassBattery });
         s.setDeviceLink('WRISTBAND', { battery: wristbandBattery });
       }
 
       const speakers =
         state === 'OVERLAP'
           ? [
-              { doa: doaAngle, id: 0 },
-              { doa: (doaAngle + 120) % 360, id: 1 },
-              { doa: (doaAngle + 240) % 360, id: 2 },
+              { doa: -90, id: 0 },
+              { doa: 0, id: 1 },
+              { doa: 90, id: 2 },
             ]
           : [{ doa: doaAngle, id: 0 }];
 
@@ -108,7 +112,7 @@ export const demoService = {
         emotionConfidence: 0.6 + Math.random() * 0.35,
         speakerCount: speakers.length,
         speakers,
-        battery: necklaceBattery,
+        battery: compassBattery,
         firmware: '1.0.0-demo',
         deviceTs: Date.now() - bleLatencyMs,
         inferenceMs,
@@ -119,7 +123,7 @@ export const demoService = {
         tinyMLInferenceTime: inferenceMs,
         tdoaComputeTime: tdoaMs,
         bleLatency: bleLatencyMs,
-        batteryLevel: necklaceBattery,
+        batteryLevel: compassBattery,
       });
     }, TICK_MS);
   },
@@ -138,6 +142,7 @@ export const demoService = {
     demoService.stop();
     const store = useCompassStore.getState();
     store.setDemoMode(false);
+    store.resetDevice('COMPASS');
     store.resetDevice('NECKLACE');
     store.resetDevice('WRISTBAND');
   },

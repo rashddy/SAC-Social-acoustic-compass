@@ -14,7 +14,8 @@ const ANDROID_12_API_LEVEL = 31;
 /**
  * Android 12 (API 31) replaced the location-based Bluetooth permissions with
  * BLUETOOTH_SCAN / BLUETOOTH_CONNECT. Older devices still gate scanning behind
- * fine location, so the required set depends on the OS version.
+ * fine location. Several OEMs still require ACCESS_FINE_LOCATION (and Location
+ * services ON) even on Android 12+ for reliable LE results, so we request it too.
  */
 const requiredAndroidPermissions = (): AndroidPermission[] => {
   const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
@@ -23,6 +24,7 @@ const requiredAndroidPermissions = (): AndroidPermission[] => {
     return [
       PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
       PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
     ];
   }
 

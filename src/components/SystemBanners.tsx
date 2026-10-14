@@ -21,13 +21,12 @@ type BannerProps = {
 
 function Banner({ icon, color, text, actionLabel, onAction }: BannerProps) {
   return (
-    <View
-      style={[styles.banner, { borderColor: `${color}44`, backgroundColor: `${color}12` }]}>
+    <View style={styles.banner}>
       <Ionicons name={icon} size={18} color={color} />
       <Text style={styles.text}>{text}</Text>
       {actionLabel && onAction && (
-        <Pressable onPress={onAction} hitSlop={8}>
-          <Text style={[styles.action, { color }]}>{actionLabel}</Text>
+        <Pressable onPress={onAction} hitSlop={8} style={styles.actionHit}>
+          <Text style={styles.action}>{actionLabel}</Text>
         </Pressable>
       )}
     </View>
@@ -40,7 +39,6 @@ function Banner({ icon, color, text, actionLabel, onAction }: BannerProps) {
  */
 export function SystemBanners() {
   const devices = useCompassStore((s) => s.devices);
-  const isDemoMode = useCompassStore((s) => s.isDemoMode);
   const micCalibrationFault = useCompassStore((s) => s.micCalibrationFault);
 
   const lowBattery = DEVICE_ROLES.filter((role: DeviceRole) => {
@@ -48,22 +46,22 @@ export function SystemBanners() {
     return battery != null && battery <= LOW_BATTERY;
   });
 
-  const necklaceDown = devices.NECKLACE.status !== 'CONNECTED' && !isDemoMode;
+  const compassDown = devices.COMPASS.status !== 'CONNECTED';
 
-  if (!necklaceDown && lowBattery.length === 0 && !micCalibrationFault) return null;
+  if (!compassDown && lowBattery.length === 0 && !micCalibrationFault) return null;
 
   return (
     <View style={styles.stack}>
-      {necklaceDown && (
+      {compassDown && (
         <Banner
           icon="bluetooth-outline"
-          color={Colors.disconnected}
+          color={Colors.textSecondary}
           text={
             bleService.isSupported()
-              ? 'SAC-Necklace is not connected. Direction and speech data are paused.'
-              : 'No wearable connected. Bluetooth needs a development build — use Demo Mode.'
+              ? 'Compass is not connected. Direction and captions are paused.'
+              : 'Compass is not connected. Pairing needs the installed app build.'
           }
-          actionLabel="Pair"
+          actionLabel="Connect"
           onAction={() => router.push('/pair')}
         />
       )}
@@ -81,7 +79,7 @@ export function SystemBanners() {
         <Banner
           icon="mic-off-outline"
           color={Colors.warning}
-          text="Microphone array calibration is stale. Direction accuracy may be reduced."
+          text="Microphone calibration is out of date. Direction may be less accurate."
           actionLabel="Calibrate"
           onAction={() => bleService.requestMicCalibration()}
         />
@@ -99,19 +97,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     borderRadius: 10,
-    borderWidth: 1,
+    backgroundColor: Colors.surface,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
+    minHeight: 48,
   },
   text: {
     flex: 1,
-    fontFamily: Fonts.label,
-    fontSize: 12,
+    fontFamily: Fonts.labelRegular,
+    fontSize: 15,
     color: Colors.textPrimary,
-    lineHeight: 18,
+    lineHeight: 20,
+  },
+  actionHit: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
   },
   action: {
     fontFamily: Fonts.labelSemiBold,
-    fontSize: 12,
+    fontSize: 15,
+    color: Colors.primary,
   },
 });

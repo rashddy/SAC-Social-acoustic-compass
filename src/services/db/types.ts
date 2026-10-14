@@ -3,8 +3,16 @@ import type { AudioStateName, DeviceRole, EmotionName } from '@/constants/bleCon
 export type UserRow = {
   userID: number;
   username: string;
+  /** Retained for the capstone ERD. Always empty; the password hash lives in passwordHash. */
   pinCode: string;
   createdAt: number;
+  passwordHash: string;
+  wrappedDek: string;
+  failedAttempts: number;
+  lockedUntil: number;
+  biometricEnabled: number;
+  biometricCheck: string;
+  role: string;
 };
 
 export type DeviceRow = {

@@ -11,7 +11,8 @@
       "icon": "./assets/expo.icon",
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "Social Acoustic Compass uses Bluetooth to connect to your SAC wearable devices for spatial speech awareness.",
-        "NSBluetoothPeripheralUsageDescription": "Social Acoustic Compass uses Bluetooth to connect to your SAC wearable devices."
+        "NSBluetoothPeripheralUsageDescription": "Social Acoustic Compass uses Bluetooth to connect to your SAC wearable devices.",
+        "NSFaceIDUsageDescription": "Social Acoustic Compass uses Face ID to unlock saved conversations on this device."
       }
     },
     "android": {
@@ -27,9 +28,15 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
         "android.permission.ACCESS_FINE_LOCATION"
       ],
-      "predictiveBackGestureEnabled": false
+        "predictiveBackGestureEnabled": false,
+        "allowBackup": false
     },
     "web": {
       "output": "single",
@@ -39,12 +46,29 @@
       "expo-router",
       "expo-sqlite",
       "expo-font",
+      "expo-file-system",
       "expo-dev-client",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "Social Acoustic Compass uses Face ID to unlock saved conversations on this device.",
+          "configureAndroidBackup": true
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Social Acoustic Compass uses Face ID to unlock saved conversations on this device."
+        }
+      ],
       [
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": false,
-          "modes": ["central"],
+          "neverForLocation": true,
+          "modes": [
+            "central"
+          ],
           "bluetoothAlwaysPermission": "Social Acoustic Compass connects to the SAC-Necklace and SAC-Wristband over Bluetooth Low Energy to receive speaker direction and send haptic commands."
         }
       ],
@@ -57,10 +81,24 @@
             "imageWidth": 76
           }
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a79c9dce-b5b3-4399-81b8-ed28a75f868f"
+      }
+    },
+    "owner": "rashdddy",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/a79c9dce-b5b3-4399-81b8-ed28a75f868f"
     }
   }
 }

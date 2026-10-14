@@ -8,12 +8,12 @@ This project targets **Expo SDK 54**.
 
 | Runtime | Command | Bluetooth | Use it for |
 | --- | --- | --- | --- |
-| Expo Go | `npm start` | No | UI work and Demo Mode |
+| Expo Go | `npm start` | No | UI work |
 | Development build | `npm run build:dev` then `npm run start:dev-client` | Yes | Anything touching the wearables |
 
 `react-native-ble-plx` is a native module, so `NativeModules.BlePlx` is always
-`null` in Expo Go. `bleService.isSupported()` returns false there and every
-screen falls back to Demo Mode. Do not try to make real BLE work in Expo Go.
+`null` in Expo Go. `bleService.isSupported()` returns false there, so pairing stays
+disabled and the screens show the necklace as not connected. Do not try to make real BLE work in Expo Go.
 
 For a panel demo with no laptop or Wi-Fi, build the standalone APK with
 `npm run build:apk` — the JavaScript is bundled, so it needs no dev server.
@@ -26,11 +26,19 @@ For a panel demo with no laptop or Wi-Fi, build the standalone APK with
 - `src/services/db/` is one repository per ERD table. Screens should use the
   repositories; `dbService.ts` is a legacy facade kept for existing callers.
 - `src/services/stt/` is the swappable speech-to-text seam. `SIMULATED` is the
-  default; the Vosk and Whisper adapters are deliberate stubs until a native
-  module and a trained model exist.
+  fallback when a native decoder is missing. Whisper is the default decoder
+  (`whisper.rn` + ggml-small). It decodes base64 PCM from the compass BLE
+  frame — not the phone mic. The first listen downloads ggml-small-q5_1.
+  A PEFT LoRA on `openai/whisper-small` can be merged with
+  `npm run whisper:model` (needs Python + torch). Vosk remains optional via
+  Settings. Rebuild the dev client after adding whisper.rn (`npm run build:dev`).
 - Database schema must match section 4.7.3 of the capstone document. Changing a
   column means bumping `SCHEMA_VERSION` in `src/services/db/client.ts` and adding
-  a migration.
+  a migration. Schema version 3 adds offline password metadata and
+  `tblSecurityAudit`. `pinCode` stays in the ERD table and is left empty.
+  Transcript text is AES-256-GCM ciphertext. Do not write plaintext transcripts
+  or passwords, and do not treat a Bluetooth connection as authentication.
+  See `docs/offline-authentication.md`.
 
 ## Conventions
 

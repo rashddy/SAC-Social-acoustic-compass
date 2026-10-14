@@ -46,6 +46,7 @@ record('schema creates all tables', () => {
     'tblDeviceSettings',
     'tblPerformanceLog',
     'appState',
+    'tblSecurityAudit',
   ];
   const found = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -65,14 +66,19 @@ record('userRepo: create local user', () => {
   if (!userID) throw new Error('no userID returned');
 });
 
-record('userRepo: store and read a hashed pin', () => {
-  db.prepare('UPDATE tblUser SET pinCode = ?, username = ? WHERE userID = ?').run(
-    'somesalt:somehash',
-    'Local User',
-    userID,
-  );
-  const row = db.prepare('SELECT pinCode FROM tblUser WHERE userID = ?').get(userID);
-  if (row.pinCode !== 'somesalt:somehash') throw new Error('pin round-trip failed');
+record('userRepo: store a password hash without the password', () => {
+  const password = 'correct-horse-battery';
+  const hash = 'sac-argon2id$m=19456,t=2,p=1$c2FsdHNhbHRzYWx0c2FsdA==$dmVyaWZpZXJ2ZXJpZmllcnZlcmlmaWVy';
+  db.prepare(
+    `UPDATE tblUser
+        SET pinCode = '', passwordHash = ?, wrappedDek = ?, username = ?
+      WHERE userID = ?`,
+  ).run(hash, 'sac1:wrapped-key', 'Local User', userID);
+  const row = db.prepare('SELECT pinCode, passwordHash, wrappedDek, role FROM tblUser WHERE userID = ?').get(userID);
+  if (row.pinCode !== '') throw new Error('pinCode should stay empty');
+  if (row.passwordHash !== hash) throw new Error('password hash round-trip failed');
+  if (String(row.passwordHash).includes(password)) throw new Error('password was stored');
+  if (row.role !== 'user') throw new Error('default role must stay user');
 });
 
 record('deviceRepo: upsert is idempotent on macaddress', () => {

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, type ViewStyle } from 'react-native';
 
 import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/typography';
@@ -10,6 +10,7 @@ type Props = {
   variant?: 'primary' | 'secondary' | 'ghost';
   icon?: keyof typeof Ionicons.glyphMap;
   disabled?: boolean;
+  loading?: boolean;
   style?: ViewStyle;
 };
 
@@ -19,34 +20,42 @@ export function SACButton({
   variant = 'primary',
   icon,
   disabled,
+  loading,
   style,
 }: Props) {
   const isPrimary = variant === 'primary';
   const isGhost = variant === 'ghost';
+  const inactive = Boolean(disabled || loading);
 
   return (
     <Pressable
       onPress={onPress}
-      disabled={disabled}
+      disabled={inactive}
       style={({ pressed }) => [
         styles.button,
         isPrimary && styles.primary,
         variant === 'secondary' && styles.secondary,
         isGhost && styles.ghost,
         pressed && styles.pressed,
-        disabled && styles.disabled,
+        disabled && !loading && styles.disabled,
         style,
       ]}
       accessibilityRole="button"
-      accessibilityLabel={title}
+      accessibilityLabel={loading ? `${title}, loading` : title}
+      accessibilityState={{ disabled: inactive, busy: Boolean(loading) }}
       hitSlop={8}>
-      {icon && (
+      {loading ? (
+        <ActivityIndicator
+          size="small"
+          color={isPrimary ? Colors.onPrimary : Colors.primary}
+        />
+      ) : icon ? (
         <Ionicons
           name={icon}
           size={20}
-          color={isPrimary ? Colors.background : Colors.primary}
+          color={isPrimary ? Colors.onPrimary : Colors.primary}
         />
-      )}
+      ) : null}
       <Text
         style={[
           styles.label,
@@ -68,7 +77,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: 24,
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 10,
   },
   primary: {
     backgroundColor: Colors.primary,
@@ -92,7 +101,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   primaryLabel: {
-    color: Colors.background,
+    color: Colors.onPrimary,
   },
   secondaryLabel: {
     color: Colors.primary,

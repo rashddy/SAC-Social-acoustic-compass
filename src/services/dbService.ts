@@ -96,12 +96,12 @@ export const dbService = {
     };
   },
 
-  async deleteSession(id: string): Promise<void> {
-    await sessionRepo.remove(Number(id));
+  async deleteSession(id: string): Promise<boolean> {
+    return sessionRepo.remove(Number(id));
   },
 
-  async clearAllData(): Promise<void> {
-    await sessionRepo.clearAll();
+  async clearAllData(): Promise<boolean> {
+    return sessionRepo.clearAll();
   },
 
   async getSetting(key: string): Promise<string | null> {

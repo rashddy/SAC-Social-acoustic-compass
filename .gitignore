@@ -42,6 +42,13 @@ example
 /ios
 /android
 
+# Vosk acoustic model (downloaded by `npm run vosk:model`)
+/modules/sac-vosk/android/src/main/assets/model-en-us/
+/tmp/
+
+# Whisper ggml + Drive adapter cache (downloaded by `npm run whisper:model`)
+/assets/whisper/*.bin
+
 # local Claude config
 .claude/
 CLAUDE.md

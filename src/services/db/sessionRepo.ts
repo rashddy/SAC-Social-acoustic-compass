@@ -1,8 +1,10 @@
 import type { AudioStateName, EmotionName } from '@/constants/bleConstants';
 
+import { decideDatabaseAccess } from '../auth/authorization';
+import { isEncryptedField, openTranscript, sealTranscript } from '../auth/fieldCipher';
+import { appSession } from '../auth/sessionVault';
 import { guard, openDb } from './client';
 import type { AcousticEventRow, SessionRow, SessionWithEvents } from './types';
-import { userRepo } from './userRepo';
 
 export type AcousticEventInput = {
   transcription: string;
@@ -24,14 +26,36 @@ export type SessionInput = {
   events: AcousticEventInput[];
 };
 
+function can(operation: 'read' | 'write' | 'delete'): boolean {
+  return (
+    decideDatabaseAccess({
+      unlocked: appSession.isUnlocked(),
+      recentAuth: appSession.recent(Date.now()),
+      operation,
+      bleConnected: false,
+    }) === 'allow'
+  );
+}
+
+function reveal(value: string | null, dek: Uint8Array): string | null {
+  if (value == null || value === '') return value;
+  try {
+    return openTranscript(value, dek);
+  } catch {
+    return null;
+  }
+}
+
 export const sessionRepo = {
   /** Writes a finished conversation and all of its acoustic events atomically. */
   async save(input: SessionInput): Promise<number | null> {
     return guard(async () => {
-      const db = await openDb();
-      const userID = await userRepo.currentUserId();
-      if (userID == null) return null;
+      if (!can('write')) return null;
+      const dek = appSession.getDek();
+      const userID = appSession.getUserId();
+      if (!dek || userID == null) return null;
 
+      const db = await openDb();
       let sessionID: number | null = null;
 
       await db.withTransactionAsync(async () => {
@@ -43,9 +67,9 @@ export const sessionRepo = {
             userID,
             input.startTime,
             input.endTime,
-            input.locationTag,
+            sealTranscript(input.locationTag, dek),
             input.totalSpeakers,
-            input.title,
+            sealTranscript(input.title, dek),
             Date.now(),
           ],
         );
@@ -59,7 +83,7 @@ export const sessionRepo = {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               sessionID,
-              event.transcription,
+              sealTranscript(event.transcription, dek),
               event.audioState,
               event.emotion,
               event.speakerDirection,
@@ -78,14 +102,22 @@ export const sessionRepo = {
 
   async list(): Promise<(SessionRow & { eventCount: number })[]> {
     return guard(async () => {
+      if (!can('read')) return [];
+      const dek = appSession.getDek();
+      if (!dek) return [];
       const db = await openDb();
-      return db.getAllAsync<SessionRow & { eventCount: number }>(
+      const rows = await db.getAllAsync<SessionRow & { eventCount: number }>(
         `SELECT s.*, COUNT(e.eventID) AS eventCount
            FROM tblConversationSession s
            LEFT JOIN tblAcousticEvent e ON e.sessionID = s.sessionID
           GROUP BY s.sessionID
           ORDER BY s.startTime DESC`,
       );
+      return rows.map((row) => ({
+        ...row,
+        title: reveal(row.title, dek) ?? 'Saved session',
+        locationTag: reveal(row.locationTag, dek),
+      }));
     }, []);
   },
 
@@ -94,8 +126,11 @@ export const sessionRepo = {
     audioState: AudioStateName,
   ): Promise<(SessionRow & { eventCount: number })[]> {
     return guard(async () => {
+      if (!can('read')) return [];
+      const dek = appSession.getDek();
+      if (!dek) return [];
       const db = await openDb();
-      return db.getAllAsync<SessionRow & { eventCount: number }>(
+      const rows = await db.getAllAsync<SessionRow & { eventCount: number }>(
         `SELECT s.*, COUNT(e.eventID) AS eventCount
            FROM tblConversationSession s
            JOIN tblAcousticEvent e ON e.sessionID = s.sessionID
@@ -104,11 +139,19 @@ export const sessionRepo = {
           ORDER BY s.startTime DESC`,
         [audioState],
       );
+      return rows.map((row) => ({
+        ...row,
+        title: reveal(row.title, dek) ?? 'Saved session',
+        locationTag: reveal(row.locationTag, dek),
+      }));
     }, []);
   },
 
   async findById(sessionID: number): Promise<SessionWithEvents | null> {
     return guard(async () => {
+      if (!can('read')) return null;
+      const dek = appSession.getDek();
+      if (!dek) return null;
       const db = await openDb();
       const session = await db.getFirstAsync<SessionRow>(
         'SELECT * FROM tblConversationSession WHERE sessionID = ?',
@@ -121,26 +164,108 @@ export const sessionRepo = {
         [sessionID],
       );
 
-      return { ...session, events, eventCount: events.length };
+      return {
+        ...session,
+        title: reveal(session.title, dek) ?? 'Saved session',
+        locationTag: reveal(session.locationTag, dek),
+        events: events.map((event) => ({
+          ...event,
+          transcription: reveal(event.transcription, dek),
+        })),
+        eventCount: events.length,
+      };
     }, null);
   },
 
-  async remove(sessionID: number): Promise<void> {
-    await guard(async () => {
+  async remove(sessionID: number): Promise<boolean> {
+    return guard(async () => {
+      if (!can('delete')) return false;
+      const userID = appSession.getUserId();
+      if (userID == null) return false;
       const db = await openDb();
+      const owned = await db.getFirstAsync<{ sessionID: number }>(
+        'SELECT sessionID FROM tblConversationSession WHERE sessionID = ? AND userID = ?',
+        [sessionID, userID],
+      );
+      if (!owned) return false;
       await db.runAsync('DELETE FROM tblAcousticEvent WHERE sessionID = ?', [sessionID]);
-      await db.runAsync('DELETE FROM tblConversationSession WHERE sessionID = ?', [sessionID]);
-    }, undefined);
+      await db.runAsync('DELETE FROM tblPerformanceLog WHERE sessionID = ?', [sessionID]);
+      await db.runAsync('DELETE FROM tblConversationSession WHERE sessionID = ? AND userID = ?', [
+        sessionID,
+        userID,
+      ]);
+      return true;
+    }, false);
   },
 
-  async clearAll(): Promise<void> {
-    await guard(async () => {
+  async clearAll(): Promise<boolean> {
+    return guard(async () => {
+      if (!can('delete')) return false;
+      const userID = appSession.getUserId();
+      if (userID == null) return false;
       const db = await openDb();
-      await db.execAsync(`
-        DELETE FROM tblAcousticEvent;
-        DELETE FROM tblConversationSession;
-        DELETE FROM tblPerformanceLog;
-      `);
-    }, undefined);
+      await db.runAsync(
+        `DELETE FROM tblPerformanceLog
+          WHERE sessionID IN (SELECT sessionID FROM tblConversationSession WHERE userID = ?)`,
+        [userID],
+      );
+      await db.runAsync(
+        `DELETE FROM tblAcousticEvent
+          WHERE sessionID IN (SELECT sessionID FROM tblConversationSession WHERE userID = ?)`,
+        [userID],
+      );
+      await db.runAsync('DELETE FROM tblConversationSession WHERE userID = ?', [userID]);
+      return true;
+    }, false);
+  },
+
+  /**
+   * Encrypts transcripts saved before password setup. Plaintext is read only
+   * inside this migration and is not returned to the UI.
+   */
+  async encryptLegacyPlaintext(): Promise<void> {
+    const dek = appSession.getDek();
+    const userID = appSession.getUserId();
+    if (!dek || userID == null) throw new Error('encryption key unavailable');
+    const db = await openDb();
+
+    const sessions = await db.getAllAsync<{
+      sessionID: number;
+      title: string | null;
+      locationTag: string | null;
+    }>('SELECT sessionID, title, locationTag FROM tblConversationSession WHERE userID = ?', [
+      userID,
+    ]);
+    for (const session of sessions) {
+      const title =
+        session.title && !isEncryptedField(session.title)
+          ? sealTranscript(session.title, dek)
+          : session.title;
+      const locationTag =
+        session.locationTag && !isEncryptedField(session.locationTag)
+          ? sealTranscript(session.locationTag, dek)
+          : session.locationTag;
+      if (title !== session.title || locationTag !== session.locationTag) {
+        await db.runAsync(
+          'UPDATE tblConversationSession SET title = ?, locationTag = ? WHERE sessionID = ?',
+          [title, locationTag, session.sessionID],
+        );
+      }
+    }
+
+    const events = await db.getAllAsync<{ eventID: number; transcription: string | null }>(
+      `SELECT e.eventID, e.transcription
+         FROM tblAcousticEvent e
+         JOIN tblConversationSession s ON s.sessionID = e.sessionID
+        WHERE s.userID = ?`,
+      [userID],
+    );
+    for (const event of events) {
+      if (!event.transcription || isEncryptedField(event.transcription)) continue;
+      await db.runAsync('UPDATE tblAcousticEvent SET transcription = ? WHERE eventID = ?', [
+        sealTranscript(event.transcription, dek),
+        event.eventID,
+      ]);
+    }
   },
 };

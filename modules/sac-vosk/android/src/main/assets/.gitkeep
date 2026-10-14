@@ -1,0 +1,2 @@
+# Placeholder — run `npm run vosk:model` to download vosk-model-small-en-us
+# into model-en-us/ (gitignored). Required before `npm run build:dev`.

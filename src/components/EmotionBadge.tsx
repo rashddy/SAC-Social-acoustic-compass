@@ -2,13 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';
 
 import type { EmotionName } from '@/constants/bleConstants';
-import { EmotionColors, EmotionIcons } from '@/constants/colors';
+import { Colors, EmotionColors, EmotionIcons } from '@/constants/colors';
 import { Fonts } from '@/constants/typography';
 
 const LABELS: Record<EmotionName, string> = {
   NEUTRAL: 'Neutral',
   HAPPY: 'Happy',
-  SAD: 'Sad',
+  SAD: 'Serious',
   ANGRY: 'Angry',
   URGENT: 'Urgent',
 };
@@ -16,29 +16,25 @@ const LABELS: Record<EmotionName, string> = {
 type Props = {
   emotion: EmotionName;
   confidence?: number;
+  pitchHz?: number;
   compact?: boolean;
 };
 
-/** Shows the prosodic cue classified by the necklace's TinyML model. */
-export function EmotionBadge({ emotion, confidence, compact = false }: Props) {
+/** Shows the locked-mic pitch cue, for example "Happy 214 Hz 68%". */
+export function EmotionBadge({ emotion, confidence, pitchHz, compact = false }: Props) {
   const color = EmotionColors[emotion];
+  const parts = [LABELS[emotion]];
+  if (pitchHz != null && pitchHz > 0) parts.push(`${Math.round(pitchHz)} Hz`);
+  if (confidence != null && confidence > 0) parts.push(`${Math.round(confidence * 100)}%`);
 
   return (
-    <View
-      style={[
-        styles.badge,
-        compact && styles.badgeCompact,
-        { borderColor: `${color}55`, backgroundColor: `${color}15` },
-      ]}>
+    <View style={[styles.badge, compact && styles.badgeCompact]}>
       <Ionicons
         name={EmotionIcons[emotion] as keyof typeof Ionicons.glyphMap}
-        size={compact ? 12 : 14}
+        size={compact ? 14 : 16}
         color={color}
       />
-      <Text style={[styles.label, compact && styles.labelCompact, { color }]}>
-        {LABELS[emotion]}
-        {confidence != null && confidence > 0 ? ` ${(confidence * 100).toFixed(0)}%` : ''}
-      </Text>
+      <Text style={[styles.label, compact && styles.labelCompact]}>{parts.join(' ')}</Text>
     </View>
   );
 }
@@ -47,22 +43,17 @@ const styles = StyleSheet.create({
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
-    borderWidth: 1,
+    gap: 6,
+    paddingVertical: 6,
     alignSelf: 'flex-start',
   },
   badgeCompact: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
+    paddingVertical: 2,
   },
   label: {
-    fontFamily: Fonts.labelSemiBold,
-    fontSize: 12,
-    letterSpacing: 0.4,
+    fontFamily: Fonts.label,
+    fontSize: 15,
+    color: Colors.textPrimary,
   },
   labelCompact: {
     fontSize: 10,

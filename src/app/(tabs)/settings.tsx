@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
-import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -12,42 +12,49 @@ import {
 } from '@/constants/bleConstants';
 import { Colors, type FontScale } from '@/constants/colors';
 import { Fonts } from '@/constants/typography';
+import { authService } from '@/services/auth/authService';
+import { biometricAvailability } from '@/services/auth/biometrics';
 import { bleService } from '@/services/bleService';
-import { userRepo } from '@/services/db';
-import { dbService } from '@/services/dbService';
+import { auditRepo, userRepo, type AuditEvent } from '@/services/db';
 import { demoService } from '@/services/demoService';
 import { settingsService } from '@/services/settingsService';
 import { speechService } from '@/services/speechService';
-import type {
-  CompassView,
-  SttEngine,
-  WristbandIntensity,
-  WristbandPattern,
-} from '@/store/compassStore';
+import type { CompassView, SttEngine } from '@/store/compassStore';
 import { useCompassStore } from '@/store/compassStore';
 
 export default function SettingsScreen() {
   const devices = useCompassStore((s) => s.devices);
-  const isDemoMode = useCompassStore((s) => s.isDemoMode);
   const sttEngine = useCompassStore((s) => s.sttEngine);
   const compassView = useCompassStore((s) => s.compassView);
   const fontScale = useCompassStore((s) => s.fontScale);
   const highContrast = useCompassStore((s) => s.highContrast);
-  const wristbandIntensity = useCompassStore((s) => s.wristbandIntensity);
-  const wristbandPattern = useCompassStore((s) => s.wristbandPattern);
   const setSttEngine = useCompassStore((s) => s.setSttEngine);
   const setCompassView = useCompassStore((s) => s.setCompassView);
   const setFontScale = useCompassStore((s) => s.setFontScale);
   const setHighContrast = useCompassStore((s) => s.setHighContrast);
-  const setWristbandIntensity = useCompassStore((s) => s.setWristbandIntensity);
-  const setWristbandPattern = useCompassStore((s) => s.setWristbandPattern);
   const reset = useCompassStore((s) => s.reset);
 
-  const [hasPin, setHasPin] = useState(false);
+  const [username, setUsername] = useState('Local account');
+  const [biometricLabel, setBiometricLabel] = useState('Unavailable on this device');
+  const [biometricOn, setBiometricOn] = useState(false);
+  const [events, setEvents] = useState<AuditEvent[]>([]);
 
-  useEffect(() => {
-    userRepo.hasPin().then(setHasPin);
+  const refreshSecurity = useCallback(() => {
+    Promise.all([userRepo.findSignedIn(), biometricAvailability(), auditRepo.recent()]).then(
+      ([account, hardware, audit]) => {
+        setUsername(account?.username ?? authService.username() ?? 'Local account');
+        setBiometricOn(Boolean(account?.biometricEnabled));
+        setBiometricLabel(hardware.label);
+        setEvents(audit);
+      },
+    );
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshSecurity();
+    }, [refreshSecurity]),
+  );
 
   /** Every preference change is written to tblDeviceSettings immediately. */
   const commit = (apply: () => void) => {
@@ -61,20 +68,6 @@ export default function SettingsScreen() {
     reset();
   };
 
-  const removePin = () => {
-    Alert.alert('Remove PIN', 'Anyone with this phone will be able to open your sessions.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: async () => {
-          await userRepo.clearPin();
-          setHasPin(false);
-        },
-      },
-    ]);
-  };
-
   const clearData = () => {
     Alert.alert(
       'Clear All Data',
@@ -85,13 +78,40 @@ export default function SettingsScreen() {
           text: 'Clear',
           style: 'destructive',
           onPress: async () => {
-            await dbService.clearAllData();
+            let result = await authService.deleteSavedSessions();
+            if (result === 'reauth') {
+              const allowed = await authService.ensureRecentAuth();
+              if (!allowed) return;
+              result = await authService.deleteSavedSessions();
+            }
+            if (result !== 'ok') {
+              Alert.alert('Not deleted', 'Saved conversations are still protected.');
+              return;
+            }
             reset();
             Alert.alert('Done', 'All data cleared.');
+            refreshSecurity();
           },
         },
       ],
     );
+  };
+
+  const toggleBiometric = async () => {
+    const allowed = await authService.ensureRecentAuth();
+    if (!allowed) return;
+    const result = biometricOn
+      ? await authService.disableBiometrics()
+      : await authService.enableBiometrics();
+    if (!result.ok) {
+      Alert.alert('Biometrics', result.message ?? 'Biometric unlock was not changed.');
+    }
+    refreshSecurity();
+  };
+
+  const logout = () => {
+    authService.logout();
+    router.replace('/auth');
   };
 
   return (
@@ -99,17 +119,13 @@ export default function SettingsScreen() {
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Settings</Text>
 
-        <Section title="Presentation">
-          <SACButton
-            title="App Overview (for panel demo)"
-            onPress={() => router.push('/?hub=1')}
-            variant="secondary"
-            icon="information-circle-outline"
-          />
-        </Section>
-
-        <Section title="BLE Devices">
-          {DEVICE_ROLES.map((role: DeviceRole) => {
+        <Section title="Compass">
+          {DEVICE_ROLES.filter((role) => {
+            // Always show the compass. Show a legacy slot only when it is linked.
+            if (role === 'COMPASS') return true;
+            const link = devices[role];
+            return link.status === 'CONNECTED' || link.id != null;
+          }).map((role: DeviceRole) => {
             const link = devices[role];
             const connected = link.status === 'CONNECTED';
             return (
@@ -142,28 +158,6 @@ export default function SettingsScreen() {
               style={styles.halfBtn}
             />
           </View>
-          {isDemoMode && <Text style={styles.demoNote}>Running in demo mode</Text>}
-        </Section>
-
-        <Section title="Haptic Intensity">
-          <ToggleRow<WristbandIntensity>
-            options={['LOW', 'MEDIUM', 'HIGH']}
-            value={wristbandIntensity}
-            onChange={(v) => commit(() => setWristbandIntensity(v))}
-            labels={{ LOW: 'Low', MEDIUM: 'Medium', HIGH: 'High' }}
-          />
-          <Text style={styles.hint}>
-            Saved to the wristband and used as the baseline that emotion cues scale from.
-          </Text>
-        </Section>
-
-        <Section title="Vibration Pattern">
-          <ToggleRow<WristbandPattern>
-            options={['PULSE', 'TAP', 'HOLD']}
-            value={wristbandPattern}
-            onChange={(v) => commit(() => setWristbandPattern(v))}
-            labels={{ PULSE: 'Pulse', TAP: 'Tap', HOLD: 'Hold' }}
-          />
         </Section>
 
         <Section title="Speech-to-Text Engine">
@@ -176,7 +170,7 @@ export default function SettingsScreen() {
                 speechService.setEngine(v);
               })
             }
-            labels={{ VOSK: 'Vosk', WHISPER: 'Whisper.rn' }}
+            labels={{ VOSK: 'Vosk', WHISPER: 'Whisper' }}
           />
           <Text style={styles.hint}>{speechService.getEngineNote()}</Text>
         </Section>
@@ -211,18 +205,34 @@ export default function SettingsScreen() {
         </Section>
 
         <Section title="Security">
-          <Text style={styles.deviceMeta}>
-            {hasPin
-              ? 'A PIN is required to open the app.'
-              : 'No PIN set. Conversation logs are unprotected.'}
+          <Text style={styles.value}>Signed in as {username}</Text>
+          <Text style={styles.hint}>
+            This sign-in protects conversations on this phone. It is not a cloud account, and a
+            forgotten password cannot be recovered by email.
           </Text>
           <SACButton
-            title={hasPin ? 'Change PIN' : 'Set Up PIN'}
-            onPress={() => router.push('/auth?mode=setup')}
+            title="Change password"
+            onPress={() => router.push('/auth?mode=password')}
             variant="secondary"
             icon="lock-closed-outline"
           />
-          {hasPin && <SACButton title="Remove PIN" onPress={removePin} variant="ghost" />}
+          <SACButton
+            title={biometricOn ? 'Turn off biometric unlock' : 'Turn on biometric unlock'}
+            onPress={() => void toggleBiometric()}
+            variant="secondary"
+            icon="finger-print"
+          />
+          <Text style={styles.hint}>{biometricLabel}</Text>
+          <SACButton title="Log out" onPress={logout} variant="ghost" />
+          {events.length > 0 ? (
+            <View style={styles.auditList}>
+              {events.map((event) => (
+                <Text key={event.auditID} style={styles.hint}>
+                  {event.eventType.replace(/_/g, ' ')} · {new Date(event.createdAt).toLocaleString()}
+                </Text>
+              ))}
+            </View>
+          ) : null}
         </Section>
 
         <Section title="Research">
@@ -239,8 +249,8 @@ export default function SettingsScreen() {
               Alert.alert(
                 ok ? 'Calibration started' : 'Not available',
                 ok
-                  ? 'The necklace is re-calibrating its microphone array. Keep the area quiet for a few seconds.'
-                  : 'Connect the SAC-Necklace to run a calibration.',
+                  ? 'The compass is re-calibrating its microphone array. Keep the area quiet for a few seconds.'
+                  : 'Connect the SAC-Compass to run a calibration.',
               );
             }}
             variant="ghost"
@@ -315,7 +325,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: Fonts.display,
-    fontSize: 22,
+    fontSize: 28,
     color: Colors.textPrimary,
   },
   section: {
@@ -323,16 +333,12 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontFamily: Fonts.labelSemiBold,
-    fontSize: 11,
+    fontSize: 13,
     color: Colors.textSecondary,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
   },
   sectionBody: {
     backgroundColor: Colors.surface,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
     padding: 16,
     gap: 12,
   },
@@ -378,11 +384,6 @@ const styles = StyleSheet.create({
   halfBtn: {
     flex: 1,
     paddingHorizontal: 12,
-  },
-  demoNote: {
-    fontFamily: Fonts.body,
-    fontSize: 11,
-    color: Colors.warning,
   },
   optionRow: {
     flexDirection: 'row',
@@ -452,5 +453,8 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     lineHeight: 20,
     marginTop: 4,
+  },
+  auditList: {
+    gap: 4,
   },
 });
